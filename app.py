@@ -156,7 +156,7 @@ def sts_receiver(sid, session):
 def start_session(sid):
     session = {
         "sts_ws": sts_connect(),
-        "send_lock": eventlet.semaphore.Semaphore(1),
+        "send_lock": Lock(),
         "audio_queue": Queue(),
         "streamsid_queue": Queue(),
         "streamsid": None,
