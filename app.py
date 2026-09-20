@@ -28,6 +28,11 @@ BUFFER_SIZE = 20 * 160
 sessions = {}
 
 
+@app.route("/health")
+def health():
+    return {"status": "ok"}
+
+
 def sts_connect():
     api_key = os.getenv("DEEPGRAM_API_KEY")
     if not api_key:
@@ -245,4 +250,5 @@ def handle_message(data):
 
 
 if __name__ == "__main__":
-    socketio.run(app, debug=True, port=5000)
+    port = int(os.getenv("PORT", "5000"))
+    socketio.run(app, host="0.0.0.0", debug=True, port=port)

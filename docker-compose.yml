@@ -1,0 +1,11 @@
+services:
+  voice-agent:
+    platform: linux/amd64
+    build:
+      context: .
+      platforms:
+        - linux/amd64
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env

@@ -1,0 +1,26 @@
+{
+  "name": "voice-agent",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-20",
+  "containers": [
+    {
+      "max_instances": 1,
+      "class_name": "VoiceAgentContainer",
+      "image": "./Dockerfile"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "VOICE_AGENT",
+        "class_name": "VoiceAgentContainer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["VoiceAgentContainer"]
+    }
+  ]
+}

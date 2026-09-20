@@ -1,0 +1,14 @@
+.venv
+.env
+.git
+.gitignore
+__pycache__
+*.py[oc]
+.idea
+.wrangler
+node_modules
+src
+wrangler.jsonc
+package.json
+package-lock.json
+*.md
