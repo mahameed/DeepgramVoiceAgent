@@ -3,7 +3,7 @@ WRANGLER := npx wrangler
 NAME     := voice-agent
 PORT     := 8080
 
-.PHONY: help build up down logs health restart clean deploy secret destroy
+.PHONY: help build up down logs health restart clean deploy secret undeploy destroy
 
 help:
 	@echo "Local Docker"
@@ -18,7 +18,7 @@ help:
 	@echo "Cloudflare"
 	@echo "  make secret    Set DEEPGRAM_API_KEY as a Worker secret"
 	@echo "  make deploy    Deploy Worker + container image"
-	@echo "  make destroy   Delete the Cloudflare Worker (teardown)"
+	@echo "  make undeploy  Delete the Cloudflare Worker (and its container)"
 
 build:
 	$(COMPOSE) build
@@ -50,5 +50,5 @@ deploy:
 	npm install
 	$(WRANGLER) deploy
 
-destroy:
+undeploy destroy:
 	$(WRANGLER) delete --name $(NAME) --force
