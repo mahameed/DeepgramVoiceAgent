@@ -1,11 +1,8 @@
-# MUST BE THE FIRST TWO LINES IN THE FILE
-import eventlet
-eventlet.monkey_patch()
-
 import base64
 import json
 import os
 from queue import Queue
+from threading import Lock
 
 from dotenv import load_dotenv
 from flask import Flask, request
@@ -19,7 +16,13 @@ load_dotenv()
 app = Flask(__name__)
 
 # logger=True and engineio_logger=True force errors out to the terminal
-socketio = SocketIO(app, cors_allowed_origins="*", logger=True, engineio_logger=True)
+socketio = SocketIO(
+    app,
+    async_mode="threading",
+    cors_allowed_origins="*",
+    logger=True,
+    engineio_logger=True,
+)
 
 BUFFER_SIZE = 20 * 160
 sessions = {}
