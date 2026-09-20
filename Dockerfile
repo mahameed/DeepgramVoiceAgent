@@ -6,6 +6,7 @@ WORKDIR /app
 
 ENV UV_COMPILE_BYTECODE=1
 ENV UV_LINK_MODE=copy
+ENV PYTHONUNBUFFERED=1
 ENV PATH="/app/.venv/bin:$PATH"
 
 COPY pyproject.toml uv.lock ./
@@ -15,4 +16,4 @@ COPY app.py pharmacy_functions.py config.json ./
 
 EXPOSE 8080
 
-CMD ["gunicorn", "-w", "1", "--threads", "50", "-b", "0.0.0.0:8080", "app:app"]
+CMD ["gunicorn", "-w", "1", "--threads", "50", "--timeout", "0", "--capture-output", "--enable-stdio-inheritance", "-b", "0.0.0.0:8080", "app:app"]

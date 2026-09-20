@@ -1,35 +1,35 @@
 import base64
 import json
 import os
+import sys
 from queue import Queue
-from threading import Lock
+from threading import Lock, Thread, current_thread
 
 from dotenv import load_dotenv
-from flask import Flask, request
-from flask_socketio import SocketIO, emit
+from flask import Flask
+from flask_sock import Sock
 from simple_websocket import Client, ConnectionClosed
 
 from pharmacy_functions import FUNCTION_MAP
 
+# Ensure stdout and stderr flush immediately in containers and daemon threads
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(line_buffering=True)
+
 load_dotenv()
 
 app = Flask(__name__)
-
-# logger=True and engineio_logger=True force errors out to the terminal
-socketio = SocketIO(
-    app,
-    async_mode="threading",
-    cors_allowed_origins="*",
-    logger=True,
-    engineio_logger=True,
-)
+app.config["SOCK_SERVER_OPTIONS"] = {"ping_interval": 25}
+sock = Sock(app)
 
 BUFFER_SIZE = 20 * 160
-sessions = {}
 
 
 @app.route("/health")
 def health():
+    print("Health check requested")
     return {"status": "ok"}
 
 
@@ -54,14 +54,22 @@ def sts_send(session, data):
         session["sts_ws"].send(data)
 
 
-def handle_barge_in(decoded, sid):
+def twilio_send(session, message):
+    with session["twilio_send_lock"]:
+        session["twilio_ws"].send(json.dumps(message))
+
+
+def handle_barge_in(decoded, session):
     if decoded["type"] == "UserStartedSpeaking":
-        session = sessions.get(sid)
+        streamsid = session["streamsid"]
+        if not streamsid:
+            return
+
         clear_message = {
             "event": "clear",
-            "streamSid": session["streamsid"] if session else None,
+            "streamSid": streamsid,
         }
-        socketio.emit("clear", clear_message, to=sid)
+        twilio_send(session, clear_message)
 
 
 def execute_function_call(func_name, arguments):
@@ -108,8 +116,8 @@ def handle_function_call_request(decoded, session):
         sts_send(session, json.dumps(error_result))
 
 
-def handle_text_message(decoded, sid, session):
-    handle_barge_in(decoded, sid)
+def handle_text_message(decoded, session):
+    handle_barge_in(decoded, session)
 
     if decoded["type"] == "FunctionCallRequest":
         handle_function_call_request(decoded, session)
@@ -128,7 +136,7 @@ def sts_sender(session):
             break
 
 
-def sts_receiver(sid, session):
+def sts_receiver(session):
     print("sts_receiver started")
     streamsid = session["streamsid_queue"].get()
     if not streamsid or session["closed"]:
@@ -147,7 +155,7 @@ def sts_receiver(sid, session):
         if isinstance(message, str):
             print(message)
             decoded = json.loads(message)
-            handle_text_message(decoded, sid, session)
+            handle_text_message(decoded, session)
             continue
 
         media_message = {
@@ -155,30 +163,40 @@ def sts_receiver(sid, session):
             "streamSid": streamsid,
             "media": {"payload": base64.b64encode(message).decode("ascii")},
         }
-        socketio.emit("media", media_message, to=sid)
+        try:
+            twilio_send(session, media_message)
+        except (ConnectionClosed, OSError) as e:
+            print(f"Twilio send error: {e}")
+            break
 
 
-def start_session(sid):
+def start_session(twilio_ws):
     session = {
         "sts_ws": sts_connect(),
         "send_lock": Lock(),
+        "twilio_ws": twilio_ws,
+        "twilio_send_lock": Lock(),
         "audio_queue": Queue(),
         "streamsid_queue": Queue(),
         "streamsid": None,
         "inbuffer": bytearray(b""),
         "closed": False,
+        "threads": [],
     }
-    sessions[sid] = session
     sts_send(session, json.dumps(load_config()))
 
-    socketio.start_background_task(sts_sender, session)
-    socketio.start_background_task(sts_receiver, sid, session)
+    session["threads"] = [
+        Thread(target=sts_sender, args=(session,), daemon=True),
+        Thread(target=sts_receiver, args=(session,), daemon=True),
+    ]
+    for thread in session["threads"]:
+        thread.start()
+
     return session
 
 
-def stop_session(sid):
-    session = sessions.pop(sid, None)
-    if not session:
+def stop_session(session):
+    if not session or session["closed"]:
         return
 
     session["closed"] = True
@@ -191,21 +209,21 @@ def stop_session(sid):
     except Exception:
         pass
 
+    for thread in session["threads"]:
+        if thread is not current_thread():
+            thread.join(timeout=2)
 
-def handle_client_event(sid, data):
-    session = sessions.get(sid)
-    if not session:
-        return
 
+def handle_client_event(session, data):
     event = data.get("event")
 
     if event == "start":
-        print("get our streamsid")
+        print("Received Twilio stream start")
         streamsid = data["start"]["streamSid"]
         session["streamsid"] = streamsid
         session["streamsid_queue"].put(streamsid)
     elif event == "connected":
-        return
+        return True
     elif event == "media":
         media = data["media"]
         chunk = base64.b64decode(media["payload"])
@@ -216,39 +234,37 @@ def handle_client_event(sid, data):
             session["audio_queue"].put(buffered)
             session["inbuffer"] = session["inbuffer"][BUFFER_SIZE:]
     elif event == "stop":
-        stop_session(sid)
-
-
-@socketio.on("connect")
-def handle_connect():
-    print(f"!!! SERVER LOG: Client connected! SID: {request.sid}")
-    try:
-        start_session(request.sid)
-        emit("server_response", {"message": "Connected to local WebSocket!"})
-    except Exception as e:
-        print(f"Failed to start session: {e}")
-        emit("server_response", {"error": str(e)})
         return False
 
-
-@socketio.on("disconnect")
-def handle_disconnect():
-    print(f"!!! SERVER LOG: Client disconnected! SID: {request.sid}")
-    stop_session(request.sid)
+    return True
 
 
-@socketio.on("client_message")
-def handle_message(data):
-    if isinstance(data, str):
-        data = json.loads(data)
+@sock.route("/media")
+def media(twilio_ws):
+    print("Twilio Media Stream connected")
+    session = None
+    try:
+        session = start_session(twilio_ws)
+        while not session["closed"]:
+            message = twilio_ws.receive()
+            if message is None:
+                break
+            if isinstance(message, bytes):
+                message = message.decode("utf-8")
 
-    event = data.get("event") if isinstance(data, dict) else None
-    if event != "media":
-        print(f"!!! SERVER LOG: Received data: {data}")
-
-    handle_client_event(request.sid, data)
+            data = json.loads(message)
+            if data.get("event") != "media":
+                print(f"Received Twilio event: {data.get('event')}")
+            if not handle_client_event(session, data):
+                break
+    except ConnectionClosed:
+        print("Twilio Media Stream disconnected")
+    except Exception as e:
+        print(f"Twilio Media Stream error: {e}")
+    finally:
+        stop_session(session)
 
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
-    socketio.run(app, host="0.0.0.0", debug=True, port=port)
+    app.run(host="0.0.0.0", debug=True, port=port)

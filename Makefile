@@ -1,6 +1,7 @@
 COMPOSE  := docker compose
 WRANGLER := npx wrangler
 NAME     := voice-agent
+CONTAINER_NAME := $(NAME)-voiceagentcontainer
 PORT     := 8080
 
 .PHONY: help build up down logs health restart clean deploy secret undeploy destroy
@@ -18,7 +19,7 @@ help:
 	@echo "Cloudflare"
 	@echo "  make secret    Set DEEPGRAM_API_KEY as a Worker secret"
 	@echo "  make deploy    Deploy Worker + container image"
-	@echo "  make undeploy  Delete the Cloudflare Worker (and its container)"
+	@echo "  make undeploy  Delete the container application, then the Worker"
 
 build:
 	$(COMPOSE) build
@@ -51,4 +52,16 @@ deploy:
 	$(WRANGLER) deploy
 
 undeploy destroy:
-	$(WRANGLER) delete --name $(NAME) --force
+	@set -eu; \
+	applications="$$( $(WRANGLER) containers list --json )"; \
+	container_ids="$$(printf '%s' "$$applications" | CONTAINER_NAME="$(CONTAINER_NAME)" node -e 'const fs = require("fs"); const applications = JSON.parse(fs.readFileSync(0, "utf8")); for (const application of applications) if (application.name === process.env.CONTAINER_NAME) console.log(application.id)')"; \
+	if [ -z "$$container_ids" ]; then \
+		echo "No Cloudflare container application named $(CONTAINER_NAME) found."; \
+	else \
+		for container_id in $$container_ids; do \
+			echo "Deleting Cloudflare container application $$container_id..."; \
+			CI=1 $(WRANGLER) containers delete "$$container_id"; \
+		done; \
+	fi; \
+	echo "Deleting Cloudflare Worker $(NAME)..."; \
+	$(WRANGLER) delete --name "$(NAME)" --force
